@@ -58,11 +58,18 @@ try { //hack for IE
 
 
 
-var 
-    TOP_OF_SCREEN = TOP_OF_SCREEN = 64,
+var PLAYER = 1,
+    LASER = 2,
+    ALIEN = 4,
+    ALIEN_BOMB = 8,
+    SHIELD = 16,
+    SAUCER = 32,
+    TOP_OF_SCREEN = 64,
+
 	TANK_Y = 352 - 16,
 	SCREEN_WIDTH = 480,
     SYS_timeInfo,
+    SYS_collisionManager,
 	SYS_process,
 	SYS_spriteParams = {
         width: 32,
@@ -96,6 +103,115 @@ var processor = function () {
     };
 };
 
+
+// collision manager
+var collisionManager = function () {
+    var listIndex = 0,
+        checkListIndex = 0,
+        grid = [],
+        checkList = {},
+        gridWidth = 15,
+        gridHeight = 12;
+
+    for (var i = 0; i < gridWidth * gridHeight; i++) {
+        grid.push({});
+    }
+
+    var getGridList = function (x, y) {
+        var idx = (Math.floor(y / 32) * gridWidth) + Math.floor(x / 32);
+        if (grid[idx] === undefined) {
+            return;
+        }
+        return grid[idx];
+    };
+    return {
+        newCollider: function (colliderFlag, collideeFlags, width, height, callback) {
+            var list, indexStr = '' + listIndex++,
+                checkIndex;
+            var colliderObj = {
+                halfWidth: width / 2,
+                halfHeight: height / 2,
+                centerX: 0,
+                centerY: 0,
+                colliderFlag: colliderFlag,
+                collideeFlags: collideeFlags,
+                update: function (x, y) {
+                    colliderObj.centerX = x + 16;
+                    colliderObj.centerY = y + 32 - colliderObj.halfHeight;
+                    if (list) {
+                        delete list[indexStr];
+                    }
+                    list = getGridList(colliderObj.centerX, colliderObj.centerY);
+                    if (list) {
+                        list[indexStr] = colliderObj;
+                    }
+                },
+                remove: function () {
+                    if (collideeFlags) {
+                        delete checkList[checkIndex];
+                    }
+                    if (list) { // list could be undefined if item was off-screen
+                        delete list[indexStr];
+                    }
+                },
+                callback: function () {
+                    callback();
+                },
+                checkCollisions: function (offsetX, offsetY) {
+                    
+                    var list = getGridList(colliderObj.centerX + offsetX,
+                                           colliderObj.centerY + offsetY);
+                    if (!list) {
+                        return;
+                    }
+                    var idx, collideeObj;
+                    for (idx in list) {
+                        if (list.hasOwnProperty(idx) &&
+                            idx !== indexStr &&
+                            (colliderObj.collideeFlags & list[idx].colliderFlag)) {
+
+                            collideeObj = list[idx];
+                            if (Math.abs(colliderObj.centerX - collideeObj.centerX) >
+                                (colliderObj.halfWidth + collideeObj.halfWidth)) {
+                                continue;
+                            }
+                            if (Math.abs(colliderObj.centerY - collideeObj.centerY) >
+                                (colliderObj.halfHeight + collideeObj.halfHeight)) {
+                                continue;
+                            }
+                            collideeObj.callback(colliderObj.colliderFlag);
+                            callback(collideeObj.colliderFlag);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            };
+            if (collideeFlags) {
+                checkIndex = '' + checkListIndex++;
+                checkList[checkIndex] = colliderObj;
+
+            }
+            return colliderObj;
+        },
+        checkCollisions: function () {
+            var idx, colliderObj;
+            for (idx in checkList) {
+                if (checkList.hasOwnProperty(idx)) {
+                    colliderObj = checkList[idx];
+
+                    for (var y = -32; y <= 32; y += 32) {
+                        for (var x = -32; x <= 32; x += 32) {
+                            if (colliderObj.checkCollisions(x, y)) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+};
 
 
 var DHTMLSprite = function (params) {
@@ -167,7 +283,7 @@ var timeInfo = function (goalFPS) {
 
             return {
                 elapsed: elapsed,
-                coeff: coeff,
+                coeff: 1,// coeff,
                 FPS: FPS,
                 averageFPS: totalFPS / iterCount,
                 averageCoeff: totalCoeff / iterCount
@@ -177,6 +293,25 @@ var timeInfo = function (goalFPS) {
             paused = true;
         }
     };
+};
+
+// Animation effect.
+var animEffect = function (x, y, imageList, timeout) {
+    var imageIndex = 0,
+        that = DHTMLSprite(SYS_spriteParams);
+        setTimeout(function(){
+            that.removed = true;
+            that.destroy();
+        }, timeout);
+    that.move = function () {
+        that.changeImage(imageList[imageIndex]);
+        imageIndex++;
+        if (imageIndex === imageList.length) {
+            imageIndex = 0;
+        }
+        that.draw(x, y);
+    };
+    SYS_process.add(that);
 };
 
 
@@ -219,7 +354,7 @@ var saucer = function (gameCallback) {
 
     var remove = function () {
         that.destroy();
-    //    collider.remove();
+        collider.remove();
         that.removed = true;
     };
 
@@ -232,12 +367,12 @@ var saucer = function (gameCallback) {
         });
     };
 
-   // var collider = SYS_collisionManager.newCollider(SAUCER, 0, 32, 14, hit);
+    var collider = SYS_collisionManager.newCollider(SAUCER, 0, 32, 14, hit);
 
     that.move = function () {
 
         that.draw(x, 32);
-      //  collider.update(x, 32);
+        collider.update(x, 32);
         x += dx;
         if (x < 0 || x > SCREEN_WIDTH - 32) {
             remove();
@@ -251,21 +386,21 @@ var saucer = function (gameCallback) {
 var laser = function (x, y, callback) {
     var that = DHTMLSprite(SYS_spriteParams);
     that.remove = function (collideeFlags) {
-        // if (collideeFlags & (TOP_OF_SCREEN + SHIELD + ALIEN_BOMB)) {
-        //     animEffect(x, y, [18], 250);
-        // }
+        if (collideeFlags & (TOP_OF_SCREEN + SHIELD + ALIEN_BOMB)) {
+            animEffect(x, y, [18], 250);
+        }
         that.destroy();
-    //    collider.remove();
+        collider.remove();
         that.removed = true;
         setTimeout(callback, 200);
     };
 
- //   var collider = SYS_collisionManager.newCollider(LASER, ALIEN + ALIEN_BOMB + SHIELD + SAUCER, 2, 10, that.remove);
+    var collider = SYS_collisionManager.newCollider(LASER, ALIEN + ALIEN_BOMB + SHIELD + SAUCER, 2, 10, that.remove);
     that.changeImage(7);
     that.move = function () {
         y -= 7 * SYS_timeInfo.coeff;
         that.draw(x, y);
-     //   collider.update(x, y);
+        collider.update(x, y);
         if (y <= -8) {
             that.remove(TOP_OF_SCREEN);
         }
@@ -323,7 +458,7 @@ var tank = function (gameCallback) {
         });
     };
 
-   // collider = SYS_collisionManager.newCollider(PLAYER, ALIEN_BOMB, 30, 12, that.hit);
+//    collider = SYS_collisionManager.newCollider(PLAYER, ALIEN_BOMB, 30, 12, that.hit);
     SYS_process.add(that);
 };
 
@@ -363,7 +498,7 @@ var game = function(){
     	 $("#draw-target").children().remove();
             SYS_process = processor();
             lives = 3;
-         //   SYS_collisionManager = collisionManager();
+            SYS_collisionManager = collisionManager();
            // aliens = aliensManager(gameCallback, aliensStartY);
            setTimeout(function () {
                tank(gameCallback);
@@ -396,7 +531,7 @@ var game = function(){
 
                 SYS_timeInfo = time.getInfo();
                 SYS_process.process();
-               // SYS_collisionManager.checkCollisions();
+                SYS_collisionManager.checkCollisions();
                 break;
 
             case 'titleScreen':
